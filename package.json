@@ -1,14 +1,9 @@
 {
   "name": "dg-dev-telegram-bot",
   "version": "1.0.0",
-  "description": "DG-DEV Cloudinary Multi-Server Telegram Bot",
-  "main": "api/bot.js",
+  "private": true,
   "scripts": {
     "start": "node api/bot.js"
-  },
-  "dependencies": {
-    "telegraf": "^4.16.3",
-    "node-fetch": "^2.7.0"
   },
   "engines": {
     "node": "26.x"
