@@ -1,4 +1,4 @@
-// bot.js — DG-DEV Media URL Generator Bot (Enhanced)
+// bot.js — DG-DEV Media URL Generator Bot v2 (Original Filename)
 const servers = [
   { cloudName: "wwb8ifud", uploadPreset: "dg_dev" },
   { cloudName: "rakvvolf", uploadPreset: "dg_dev1" },
@@ -21,12 +21,14 @@ const START_CAPTION = `<b>╭━━━『 DG-DEV BOT 』━━━╮</b>
 🔗 ᴅɪʀᴇᴄᴛ ᴜʀʟ ɢᴇɴᴇʀᴀᴛᴏʀ
 📋 ᴏɴᴇ-ᴄʟɪᴄᴋ ᴄᴏᴘʏ
 ⚡ ꜱᴘᴇᴇᴅ ᴛᴇꜱᴛ ʙᴜɪʟᴛ-ɪɴ
+📁 ᴏʀɪɢɪɴᴀʟ ꜰɪʟᴇɴᴀᴍᴇ ᴘʀᴇꜱᴇʀᴠᴇᴅ
 
 <b>╰━━━━━━━━━━━━━━━━━━━━╯</b>
 
 📤 <b>Send any Image, Video, Audio or Document</b> and I'll convert it to a direct URL instantly!
 
-⚡ <i>Send multiple files at once — each file gets its own link!</i>`;
+⚡ <i>Send multiple files at once — each file gets its own link!</i>
+📎 <i>Tip: Send files as Documents to keep the original filename.</i>`;
 
 /* ---------- Helpers ---------- */
 function esc(text) {
@@ -44,6 +46,31 @@ function formatBytes(bytes) {
     i++;
   }
   return `${n.toFixed(1)} ${units[i]}`;
+}
+
+/**
+ * Build a clean public_id from the original filename.
+ * - Strips extension (Cloudinary appends format automatically)
+ * - Removes OS-forbidden chars
+ * - Replaces spaces with "_"
+ * - Preserves Unicode (Sinhala, etc.)
+ */
+function buildPublicId(fileName) {
+  let name = (fileName || "file").trim();
+
+  // Strip last extension (e.g., "song.mp3" -> "song")
+  const dotIdx = name.lastIndexOf(".");
+  if (dotIdx > 0) name = name.slice(0, dotIdx);
+
+  // Remove chars forbidden by Cloudinary / OS
+  name = name
+    .replace(/[\\/:*?"<>|\x00-\x1F]+/g, "")
+    .replace(/\s+/g, "_")
+    .trim();
+
+  if (!name) name = "file";
+  if (name.length > 180) name = name.slice(0, 180);
+  return name;
 }
 
 async function tgApi(token, method, payload) {
@@ -76,9 +103,11 @@ async function sendChatAction(chatId, action, token) {
   } catch (_) {}
 }
 
-/* ---------- Cloudinary Multi-Server Upload ---------- */
+/* ---------- Cloudinary Multi-Server Upload (original filename) ---------- */
 async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
+  const publicId = buildPublicId(fileName);
   let lastError = "Unknown error";
+
   for (let i = 0; i < servers.length; i++) {
     const server = servers[i];
     try {
@@ -86,7 +115,12 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
       const blob = new Blob([fileBuffer], { type: mimeType });
       formData.append("file", blob, fileName || "file");
       formData.append("upload_preset", server.uploadPreset);
-      formData.append("folder", "dg_dev_bot");
+
+      // 🔑 THIS is what keeps the original filename in the URL
+      formData.append("public_id", publicId);
+      formData.append("use_filename", "true");
+      formData.append("unique_filename", "false");
+      formData.append("overwrite", "true");
 
       const response = await fetch(
         `https://api.cloudinary.com/v1_1/${server.cloudName}/auto/upload`,
@@ -94,21 +128,35 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
       );
 
       const data = await response.json();
+
       if (response.ok && data.secure_url) {
         return {
           url: data.secure_url,
           serverUsed: `Server ${i + 1}`,
           resourceType: data.resource_type,
           bytes: data.bytes,
-          format: data.format
+          format: data.format,
+          publicId: data.public_id
         };
       }
-      lastError = data.error?.message || `Server ${i + 1} rejected`;
+
+      // A file with the exact same name already exists on this server.
+      // Try the next Cloudinary cloud (each is a separate namespace).
+      const msg = data.error?.message || "";
+      if (/already exists/i.test(msg)) {
+        lastError = `"${fileName}" already exists on the server.`;
+        console.log(`Server ${i + 1} collision → trying next…`);
+        continue;
+      }
+
+      lastError = msg || `Server ${i + 1} rejected`;
+      console.log(`Server ${i + 1} error:`, lastError);
     } catch (err) {
       lastError = err.message;
-      console.log(`Server ${i + 1} failed → trying next…`);
+      console.log(`Server ${i + 1} failed → trying next…`, err.message);
     }
   }
+
   throw new Error(lastError);
 }
 
@@ -116,6 +164,7 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
 function detectMedia(message) {
   if (message.photo) {
     const p = message.photo[message.photo.length - 1];
+    // Telegram does NOT send original filename for compressed photos
     return {
       fileId: p.file_id,
       mimeType: "image/jpeg",
@@ -182,10 +231,8 @@ async function handleMedia(message, BOT_TOKEN) {
   const startedAt = Date.now();
   const userCaption = message.caption ? esc(message.caption) : "";
 
-  // Show "typing/uploading…" indicator
   sendChatAction(chatId, media.action, BOT_TOKEN);
 
-  // Post initial status message (we'll edit it on completion)
   const statusRes = await sendTelegramMessage(
     chatId,
     `${media.emoji} <b>ᴜᴘʟᴏᴀᴅɪɴɢ ${media.label.toUpperCase()}…</b>\n\n` +
@@ -196,30 +243,30 @@ async function handleMedia(message, BOT_TOKEN) {
   const statusId = statusRes?.result?.message_id;
 
   try {
-    // 1) Get file path from Telegram
     const fileData = await tgApi(BOT_TOKEN, "getFile", { file_id: media.fileId });
     if (!fileData.ok) throw new Error("Failed to get file from Telegram");
 
     const filePath = fileData.result.file_path;
     const downloadUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
 
-    // 2) Download file
     const mediaRes = await fetch(downloadUrl);
     if (!mediaRes.ok) throw new Error("Failed to download file");
     const arrayBuffer = await mediaRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // 3) Upload to Cloudinary with fallback
     const result = await uploadToCloudinary(buffer, media.mimeType, media.fileName);
 
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(2);
     const sizeStr = formatBytes(result.bytes);
 
+    // Last segment of URL = the original filename (no random codes)
+    const lastSegment = result.url.split("/").pop();
+
     const successText =
       `✅ <b>ᴜᴘʟᴏᴀᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟ!</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `${media.emoji} <b>ᴛʏᴘᴇ:</b> ${media.label}\n` +
-      `📦 <b>ꜰɪʟᴇ:</b> <code>${esc(media.fileName)}</code>\n` +
+      `📦 <b>ꜰɪʟᴇ:</b> <code>${esc(lastSegment)}</code>\n` +
       (sizeStr ? `📏 <b>ꜱɪᴢᴇ:</b> <code>${sizeStr}</code>\n` : "") +
       `🌐 <b>ꜱᴇʀᴠᴇʀ:</b> ${result.serverUsed}\n` +
       `⚡ <b>ꜱᴘᴇᴇᴅ:</b> <code>${elapsed}s</code>\n` +
@@ -227,7 +274,7 @@ async function handleMedia(message, BOT_TOKEN) {
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `🔗 <b>ᴅɪʀᴇᴄᴛ ᴜʀʟ:</b>\n` +
       `<code>${esc(result.url)}</code>\n\n` +
-      `<i>👇 Tap the Copy button below to copy the URL.</i>`;
+      `<i>👇 Tap Copy to grab the URL.</i>`;
 
     const keyboard = {
       inline_keyboard: [
@@ -238,7 +285,6 @@ async function handleMedia(message, BOT_TOKEN) {
       ]
     };
 
-    // Try to edit status → success
     let edited = false;
     if (statusId) {
       const editRes = await tgApi(BOT_TOKEN, "editMessageText", {
@@ -258,7 +304,8 @@ async function handleMedia(message, BOT_TOKEN) {
     const errText =
       `❌ <b>ᴜᴘʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ!</b>\n\n` +
       `${media.emoji} <b>ꜰɪʟᴇ:</b> <code>${esc(media.fileName)}</code>\n` +
-      `⚠️ <b>ᴇʀʀᴏʀ:</b> ${esc(error.message)}`;
+      `⚠️ <b>ᴇʀʀᴏʀ:</b> ${esc(error.message)}\n\n` +
+      `<i>Tip: If the filename already exists, rename the file and try again.</i>`;
 
     if (statusId) {
       const editRes = await tgApi(BOT_TOKEN, "editMessageText", {
@@ -299,7 +346,6 @@ export default async function handler(req, res) {
     if (text === "/start" || text.startsWith("/start ")) {
       sendChatAction(chatId, "typing", BOT_TOKEN);
 
-      // Send photo with caption (image + speed-styled welcome text)
       const photoRes = await tgApi(BOT_TOKEN, "sendPhoto", {
         chat_id: chatId,
         photo: START_IMAGE,
@@ -307,7 +353,6 @@ export default async function handler(req, res) {
         parse_mode: "HTML"
       });
 
-      // Fallback: if photo fails, send caption as text
       if (!photoRes.ok) {
         await sendTelegramMessage(chatId, START_CAPTION, BOT_TOKEN);
       }
@@ -324,6 +369,8 @@ export default async function handler(req, res) {
           `2️⃣ Wait a few seconds ⏳\n` +
           `3️⃣ Tap <b>📋 Copy URL</b> button\n\n` +
           `📦 <b>Bulk Upload:</b> Send multiple files at once — every file gets its own link!\n\n` +
+          `📁 <b>Filename Tip:</b> The URL keeps your original filename.\n` +
+          `If you want the exact original name for photos, send them as <b>Documents</b>.\n\n` +
           `⚡ <b>Multi-Server:</b> 4 Cloudinary servers = max speed & 99.9% uptime.`,
         BOT_TOKEN
       );
@@ -345,4 +392,4 @@ export default async function handler(req, res) {
   }
 
   return res.status(200).json({ status: "ok" });
-        }
+  }
