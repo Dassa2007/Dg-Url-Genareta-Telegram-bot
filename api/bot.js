@@ -1,4 +1,4 @@
-// bot.js — DG-DEV Media URL Generator Bot v2.1 (Error Fixed)
+// bot.js — DG-DEV Media URL Generator Bot v2.2 (Final Fixed)
 const servers = [
   { cloudName: "wwb8ifud", uploadPreset: "dg_dev" },
   { cloudName: "rakvvolf", uploadPreset: "dg_dev1" },
@@ -48,26 +48,14 @@ function formatBytes(bytes) {
   return `${n.toFixed(1)} ${units[i]}`;
 }
 
-/**
- * Build a clean public_id from the original filename.
- * - Strips extension (Cloudinary appends format automatically)
- * - Removes OS-forbidden chars
- * - Replaces spaces with "_"
- * - Preserves Unicode (Sinhala, etc.)
- */
 function buildPublicId(fileName) {
   let name = (fileName || "file").trim();
-
-  // Strip last extension (e.g., "song.mp3" -> "song")
   const dotIdx = name.lastIndexOf(".");
   if (dotIdx > 0) name = name.slice(0, dotIdx);
-
-  // Remove chars forbidden by Cloudinary / OS
   name = name
     .replace(/[\\/:*?"<>|\x00-\x1F]+/g, "")
     .replace(/\s+/g, "_")
     .trim();
-
   if (!name) name = "file";
   if (name.length > 180) name = name.slice(0, 180);
   return name;
@@ -103,7 +91,7 @@ async function sendChatAction(chatId, action, token) {
   } catch (_) {}
 }
 
-/* ---------- Cloudinary Multi-Server Upload (Fixed) ---------- */
+/* ---------- Cloudinary Multi-Server Upload (Fixed for Unsigned) ---------- */
 async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
   const publicId = buildPublicId(fileName);
   let lastError = "Unknown error";
@@ -115,11 +103,9 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
       const blob = new Blob([fileBuffer], { type: mimeType });
       formData.append("file", blob, fileName || "file");
       formData.append("upload_preset", server.uploadPreset);
-
-      // 🔑 Keep original filename (No overwrite param allowed for unsigned)
+      
+      // 🔑 public_id එක විතරක් යවනවා (Cloudinary unsigned වලට මේකට අවසර දෙනවා)
       formData.append("public_id", publicId);
-      formData.append("use_filename", "true");
-      formData.append("unique_filename", "false"); 
 
       const response = await fetch(
         `https://api.cloudinary.com/v1_1/${server.cloudName}/auto/upload`,
@@ -139,7 +125,6 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
         };
       }
 
-      // File already exists on this server -> try next Cloudinary account
       const msg = data.error?.message || "";
       if (/already exists/i.test(msg)) {
         lastError = `"${fileName}" already exists on the server.`;
@@ -388,4 +373,4 @@ export default async function handler(req, res) {
   }
 
   return res.status(200).json({ status: "ok" });
-}
+      }
