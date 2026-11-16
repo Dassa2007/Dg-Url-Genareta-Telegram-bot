@@ -1,10 +1,3 @@
-const { Telegraf } = require('telegraf');
-const fetch = require('node-fetch');
-const FormData = require('form-data');
-
-const bot = new Telegraf(process.env.BOT_TOKEN);
-
-// ඔයාගේ Cloudinary සර්වර් 4
 const servers = [
   { cloudName: "wwb8ifud", uploadPreset: "dg_dev" },
   { cloudName: "rakvvolf", uploadPreset: "dg_dev1" },
@@ -12,13 +5,14 @@ const servers = [
   { cloudName: "dxctmzctl", uploadPreset: "Dg_project" }
 ];
 
-// සර්වර් හරහා ස්වයංක්‍රීයව මාරු වෙමින් (Fallback) අප්ලෝඩ් කිරීමේ ෆන්ෂන් එක
-async function uploadToCloudinaryWithFallback(fileBuffer, mimeType) {
+// බිල්ට්-ඉන් Fetch මගින් සර්වර් හරහා අප්ලෝඩ් කිරීම (Fallback සමඟ)
+async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
   for (let i = 0; i < servers.length; i++) {
     const server = servers[i];
     try {
       const formData = new FormData();
-      formData.append('file', fileBuffer, { filename: 'file', contentType: mimeType });
+      const blob = new Blob([fileBuffer], { type: mimeType });
+      formData.append('file', blob, fileName || 'file');
       formData.append('upload_preset', server.uploadPreset);
 
       const response = await fetch(
@@ -40,74 +34,87 @@ async function uploadToCloudinaryWithFallback(fileBuffer, mimeType) {
   throw new Error('All servers are currently busy or failed.');
 }
 
-// /start කමාන්ඩ් එකට පිළිතුරු
-bot.start((ctx) => {
-  ctx.reply(
-    "👋 Welcome to DG-DEV Media URL Generator Bot!\n\n" +
-    "📤 Send me any Image, Video, or Audio files (single or multiple at once), and I will generate direct URLs for you using our multi-server network!"
-  );
-});
+async function sendTelegramMessage(chatId, text, token) {
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' })
+  });
+}
 
-// ෆයිල් හෝ ෆොටෝ ලැබුනු විට ක්‍රියාත්මක වීම (Multiple files ද ඇතුළුව)
-bot.on(['photo', 'video', 'audio', 'document'], async (ctx) => {
-  let fileId = null;
-  let mimeType = 'application/octet-stream';
-
-  if (ctx.message.photo) {
-    // Photos වල වැඩිම resolution එක තෝරාගැනීම
-    const photo = ctx.message.photo[ctx.message.photo.length - 1];
-    fileId = photo.file_id;
-    mimeType = 'image/jpeg';
-  } else if (ctx.message.video) {
-    fileId = ctx.message.video.file_id;
-    mimeType = ctx.message.video.mime_type || 'video/mp4';
-  } else if (ctx.message.audio) {
-    fileId = ctx.message.audio.file_id;
-    mimeType = ctx.message.audio.mime_type || 'audio/mpeg';
-  } else if (ctx.message.document) {
-    fileId = ctx.message.document.file_id;
-    mimeType = ctx.message.document.mime_type || 'application/octet-stream';
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(200).send('DG-DEV Bot is running successfully!');
   }
 
-  if (!fileId) return ctx.reply("❌ Please send a valid image, video, or audio file.");
+  const BOT_TOKEN = process.env.BOT_TOKEN;
+  const update = req.body;
 
-  const processingMsg = await ctx.reply("⏳ Downloading and uploading to DG-DEV Servers...");
+  if (update.message) {
+    const chatId = update.message.chat.id;
+    const text = update.message.text;
 
-  try {
-    // Telegram වලින් ෆයිල් ලින්ක් එක ලබාගැනීම
-    const fileLink = await ctx.telegram.getFileLink(fileId);
-    const fileRes = await fetch(fileLink);
-    const arrayBuffer = await fileRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    if (text === '/start') {
+      await sendTelegramMessage(
+        chatId,
+        "👋 Welcome to DG-DEV Media URL Generator Bot!\n\n📤 Send me any Image, Video, or Audio files, and I will generate direct URLs using our multi-server network!",
+        BOT_TOKEN
+      );
+      return res.status(200).json({ status: 'ok' });
+    }
 
-    // සර්වර් හරහා අප්ලෝඩ් කිරීම
-    const result = await uploadToCloudinaryWithFallback(buffer, mimeType);
+    let fileId = null;
+    let fileName = 'file';
+    let mimeType = 'application/octet-stream';
 
-    await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      processingMsg.message_id,
-      undefined,
-      `✅ **Upload Successful!**\n\n` +
-      `🌐 **Server:** ${result.serverUsed}\n` +
-      `🔗 **Direct URL:**\n\`${result.url}\``,
-      { parse_mode: 'Markdown' }
-    );
-  } catch (error) {
-    await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      processingMsg.message_id,
-      undefined,
-      `❌ Upload failed: ${error.message}`
-    );
+    if (update.message.photo) {
+      const photo = update.message.photo[update.message.photo.length - 1];
+      fileId = photo.file_id;
+      mimeType = 'image/jpeg';
+      fileName = 'image.jpg';
+    } else if (update.message.video) {
+      fileId = update.message.video.file_id;
+      mimeType = update.message.video.mime_type || 'video/mp4';
+      fileName = update.message.video.file_name || 'video.mp4';
+    } else if (update.message.audio) {
+      fileId = update.message.audio.file_id;
+      mimeType = update.message.audio.mime_type || 'audio/mpeg';
+      fileName = update.message.audio.file_name || 'audio.mp3';
+    } else if (update.message.document) {
+      fileId = update.message.document.file_id;
+      mimeType = update.message.document.mime_type || 'application/octet-stream';
+      fileName = update.message.document.file_name || 'document';
+    }
+
+    if (fileId) {
+      try {
+        // Telegram ਤੋਂ File Path ලබාගැනීම
+        const fileRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`);
+        const fileData = await fileRes.json();
+
+        if (fileData.ok) {
+          const filePath = fileData.result.file_path;
+          const downloadUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+          
+          const mediaRes = await fetch(downloadUrl);
+          const arrayBuffer = await mediaRes.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+
+          const result = await uploadToCloudinary(buffer, mimeType, fileName);
+
+          await sendTelegramMessage(
+            chatId,
+            `✅ **Upload Successful!**\n\n🌐 **Server:** ${result.serverUsed}\n🔗 **Direct URL:**\n\`${result.url}\``,
+            BOT_TOKEN
+          );
+        } else {
+          await sendTelegramMessage(chatId, "❌ Failed to fetch file from Telegram.", BOT_TOKEN);
+        }
+      } catch (error) {
+        await sendTelegramMessage(chatId, `❌ Upload failed: ${error.message}`, BOT_TOKEN);
+      }
+    }
   }
-});
 
-// Vercel සඳහා Webhook Export කිරීම
-module.exports = async (req, res) => {
-  if (req.method === 'POST') {
-    await bot.handleUpdate(req.body);
-    res.status(200).json({ status: 'ok' });
-  } else {
-    res.status(200).send('DG-DEV Bot is running successfully!');
-  }
-};
+  return res.status(200).json({ status: 'ok' });
+}
