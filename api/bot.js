@@ -1,4 +1,4 @@
-// bot.js — DG-DEV Media URL Generator Bot v2.4 (Advanced Error Handling)
+// bot.js — DG-DEV Media URL Generator Bot v2.5 (Cache & Overwrite Fix)
 const servers = [
   { cloudName: "wwb8ifud", uploadPreset: "dg_dev" },
   { cloudName: "rakvvolf", uploadPreset: "dg_dev1" },
@@ -95,7 +95,6 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
       formData.append("upload_preset", server.uploadPreset);
       formData.append("public_id", publicId);
 
-      // සටහන: Video/Audio සඳහා Cloudinary එකේ auto endpoint එක හරියට වැඩ කරයි.
       const response = await fetch(
         `https://api.cloudinary.com/v1_1/${server.cloudName}/auto/upload`,
         { method: "POST", body: formData }
@@ -126,8 +125,17 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
 
 /* ---------- Media Detection ---------- */
 function detectMedia(message) {
+  // 🟢 අලුත් වෙනස්කම: පින්තූර වලට අද්විතීය නමක් දීම (Cache ප්‍රශ්නය විසඳීමට)
   if (message.photo) {
-    return { fileId: message.photo[message.photo.length - 1].file_id, mimeType: "image/jpeg", fileName: "image.jpg", label: "Image", emoji: "🖼️", action: "upload_photo" };
+    const timeStr = Date.now().toString().slice(-6); 
+    return { 
+      fileId: message.photo[message.photo.length - 1].file_id, 
+      mimeType: "image/jpeg", 
+      fileName: `image_${timeStr}.jpg`, 
+      label: "Image", 
+      emoji: "🖼️", 
+      action: "upload_photo" 
+    };
   }
   if (message.video) {
     return { fileId: message.video.file_id, mimeType: message.video.mime_type || "video/mp4", fileName: message.video.file_name || "video.mp4", label: "Video", emoji: "🎬", action: "upload_video" };
@@ -164,7 +172,6 @@ async function handleMedia(message, BOT_TOKEN) {
   try {
     const fileData = await tgApi(BOT_TOKEN, "getFile", { file_id: media.fileId });
     
-    // Telegram 20MB Limit Error එක අල්ලා ගැනීම
     if (!fileData.ok) {
       let errMsg = fileData.description || "Failed to get file from Telegram";
       if (errMsg.includes("too big")) {
@@ -182,7 +189,6 @@ async function handleMedia(message, BOT_TOKEN) {
     const arrayBuffer = await mediaRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Upload to Cloudinary
     const result = await uploadToCloudinary(buffer, media.mimeType, media.fileName);
 
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(2);
@@ -225,12 +231,11 @@ async function handleMedia(message, BOT_TOKEN) {
       await sendTelegramMessage(chatId, successText, BOT_TOKEN, { reply_markup: keyboard });
     }
   } catch (error) {
-    // මෙතනදි අපි හරියටම Error එක පෙන්නනවා. (Vercel Timeout / Cloudinary Reject / 20MB Limit)
     const errText =
       `❌ <b>ᴜᴘʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ!</b>\n\n` +
       `${media.emoji} <b>ꜰɪʟᴇ:</b> <code>${esc(media.fileName)}</code>\n` +
       `⚠️ <b>ᴇʀʀᴏʀ:</b> ${esc(error.message)}\n\n` +
-      `<i>💡 Tip: If this is a video/audio, make sure it is under 20MB and your Cloudinary preset allows Video/Raw uploads.</i>`;
+      `<i>💡 Tip: Make sure the file is under 20MB and the Cloudinary preset allows this file type.</i>`;
 
     if (statusId) {
       const editRes = await tgApi(BOT_TOKEN, "editMessageText", {
@@ -276,4 +281,4 @@ export default async function handler(req, res) {
     console.error("Handler error:", err);
   }
   return res.status(200).json({ status: "ok" });
-        }
+                                   }
