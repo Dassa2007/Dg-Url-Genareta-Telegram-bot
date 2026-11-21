@@ -1,4 +1,4 @@
-// bot.js — DG-DEV Media URL Generator Bot v2.3
+// bot.js — DG-DEV Media URL Generator Bot v2.4 (Advanced Error Handling)
 const servers = [
   { cloudName: "wwb8ifud", uploadPreset: "dg_dev" },
   { cloudName: "rakvvolf", uploadPreset: "dg_dev1" },
@@ -6,8 +6,7 @@ const servers = [
   { cloudName: "dxctmzctl", uploadPreset: "Dg_project" }
 ];
 
-const START_IMAGE =
-  "https://res.cloudinary.com/wwb8ifud/image/upload/v1794841366/yvfhco7nv1ecnmknneik.jpg";
+const START_IMAGE = "https://res.cloudinary.com/wwb8ifud/image/upload/v1794841366/yvfhco7nv1ecnmknneik.jpg";
 
 const START_CAPTION = `<b>╭━━━『 DG-DEV BOT 』━━━╮</b>
 
@@ -25,10 +24,7 @@ const START_CAPTION = `<b>╭━━━『 DG-DEV BOT 』━━━╮</b>
 
 <b>╰━━━━━━━━━━━━━━━━━━━━╯</b>
 
-📤 <b>Send any Image, Video, Audio or Document</b> and I'll convert it to a direct URL instantly!
-
-⚡ <i>Send multiple files at once — each file gets its own link!</i>
-📎 <i>Tip: Send files as Documents to keep the original filename.</i>`;
+📤 <b>Send any Image, Video, Audio or Document</b> and I'll convert it to a direct URL instantly!`;
 
 /* ---------- Helpers ---------- */
 function esc(text) {
@@ -48,18 +44,11 @@ function formatBytes(bytes) {
   return `${n.toFixed(1)} ${units[i]}`;
 }
 
-// Video/Audio වල නම්වල තියෙන විශේෂ අකුරු අයින් කරන ලොජික් එක
 function buildPublicId(fileName) {
   let name = (fileName || "file").trim();
   const dotIdx = name.lastIndexOf(".");
-  if (dotIdx > 0) name = name.slice(0, dotIdx); // Extension එක අයින් කිරීම
-  
-  // අකුරු, ඉලක්කම්, Hyphen, Underscore සහ සිංහල අකුරු විතරක් තබා ගැනීම
-  name = name
-    .replace(/[^a-zA-Z0-9_\-\u0D80-\u0DFF]/g, "_") 
-    .replace(/_+/g, "_")
-    .trim();
-
+  if (dotIdx > 0) name = name.slice(0, dotIdx);
+  name = name.replace(/[^a-zA-Z0-9_\-\u0D80-\u0DFF]/g, "_").replace(/_+/g, "_").trim();
   if (!name) name = "file";
   if (name.length > 100) name = name.slice(0, 100);
   return name;
@@ -74,8 +63,7 @@ async function tgApi(token, method, payload) {
     });
     return await res.json();
   } catch (err) {
-    console.log(`tgApi ${method} error:`, err.message);
-    return { ok: false };
+    return { ok: false, description: err.message };
   }
 }
 
@@ -90,9 +78,7 @@ async function sendTelegramMessage(chatId, text, token, extra = {}) {
 }
 
 async function sendChatAction(chatId, action, token) {
-  try {
-    await tgApi(token, "sendChatAction", { chat_id: chatId, action });
-  } catch (_) {}
+  try { await tgApi(token, "sendChatAction", { chat_id: chatId, action }); } catch (_) {}
 }
 
 /* ---------- Cloudinary Multi-Server Upload ---------- */
@@ -109,6 +95,7 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
       formData.append("upload_preset", server.uploadPreset);
       formData.append("public_id", publicId);
 
+      // සටහන: Video/Audio සඳහා Cloudinary එකේ auto endpoint එක හරියට වැඩ කරයි.
       const response = await fetch(
         `https://api.cloudinary.com/v1_1/${server.cloudName}/auto/upload`,
         { method: "POST", body: formData }
@@ -120,50 +107,39 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
         return {
           url: data.secure_url,
           serverUsed: `Server ${i + 1}`,
-          resourceType: data.resource_type,
-          bytes: data.bytes,
-          format: data.format
+          bytes: data.bytes
         };
       }
 
       const msg = data.error?.message || "";
       if (/already exists/i.test(msg)) {
-        lastError = `"${fileName}" already exists on the server.`;
+        lastError = `File already exists on Server ${i+1}`;
         continue;
       }
-
-      lastError = msg || `Server ${i + 1} rejected`;
+      lastError = `[Server ${i+1}] ${msg || "Rejected"}`;
     } catch (err) {
       lastError = err.message;
     }
   }
-
   throw new Error(lastError);
 }
 
 /* ---------- Media Detection ---------- */
 function detectMedia(message) {
   if (message.photo) {
-    const p = message.photo[message.photo.length - 1];
-    return { fileId: p.file_id, mimeType: "image/jpeg", fileName: "image.jpg", kind: "image", emoji: "🖼️", label: "Image", action: "upload_photo" };
+    return { fileId: message.photo[message.photo.length - 1].file_id, mimeType: "image/jpeg", fileName: "image.jpg", label: "Image", emoji: "🖼️", action: "upload_photo" };
   }
   if (message.video) {
-    return { fileId: message.video.file_id, mimeType: message.video.mime_type || "video/mp4", fileName: message.video.file_name || "video.mp4", kind: "video", emoji: "🎬", label: "Video", action: "upload_video" };
+    return { fileId: message.video.file_id, mimeType: message.video.mime_type || "video/mp4", fileName: message.video.file_name || "video.mp4", label: "Video", emoji: "🎬", action: "upload_video" };
   }
   if (message.animation) {
-    return { fileId: message.animation.file_id, mimeType: message.animation.mime_type || "image/gif", fileName: message.animation.file_name || "animation.gif", kind: "animation", emoji: "🎞️", label: "GIF", action: "upload_photo" };
-  }
-  if (message.video_note) {
-    return { fileId: message.video_note.file_id, mimeType: "video/mp4", fileName: "video_note.mp4", kind: "video_note", emoji: "⭕", label: "Round Video", action: "upload_video" };
+    return { fileId: message.animation.file_id, mimeType: message.animation.mime_type || "image/gif", fileName: message.animation.file_name || "animation.gif", label: "GIF", emoji: "🎞️", action: "upload_photo" };
   }
   if (message.audio) {
-    return { fileId: message.audio.file_id, mimeType: message.audio.mime_type || "audio/mpeg", fileName: message.audio.file_name || "audio.mp3", kind: "audio", emoji: "🎵", label: "Audio", action: "upload_document" };
-  }
-  if (message.voice) {
-    return { fileId: message.voice.file_id, mimeType: message.voice.mime_type || "audio/ogg", fileName: "voice.ogg", kind: "voice", emoji: "🎤", label: "Voice", action: "upload_document" };
+    return { fileId: message.audio.file_id, mimeType: message.audio.mime_type || "audio/mpeg", fileName: message.audio.file_name || "audio.mp3", label: "Audio", emoji: "🎵", action: "upload_document" };
   }
   if (message.document) {
-    return { fileId: message.document.file_id, mimeType: message.document.mime_type || "application/octet-stream", fileName: message.document.file_name || "document", kind: "document", emoji: "📄", label: "File", action: "upload_document" };
+    return { fileId: message.document.file_id, mimeType: message.document.mime_type || "application/octet-stream", fileName: message.document.file_name || "document", label: "File", emoji: "📄", action: "upload_document" };
   }
   return null;
 }
@@ -175,15 +151,12 @@ async function handleMedia(message, BOT_TOKEN) {
   if (!media) return;
 
   const startedAt = Date.now();
-  const userCaption = message.caption ? esc(message.caption) : "";
-
   sendChatAction(chatId, media.action, BOT_TOKEN);
 
   const statusRes = await sendTelegramMessage(
     chatId,
     `${media.emoji} <b>ᴜᴘʟᴏᴀᴅɪɴɢ ${media.label.toUpperCase()}…</b>\n\n` +
-      `📦 <b>ꜰɪʟᴇ:</b> <code>${esc(media.fileName)}</code>\n` +
-      `⏳ <i>Connecting to fastest server…</i>`,
+      `📦 <b>ꜰɪʟᴇ:</b> <code>${esc(media.fileName)}</code>`,
     BOT_TOKEN
   );
   const statusId = statusRes?.result?.message_id;
@@ -191,11 +164,11 @@ async function handleMedia(message, BOT_TOKEN) {
   try {
     const fileData = await tgApi(BOT_TOKEN, "getFile", { file_id: media.fileId });
     
-    // 🔴 Telegram 20MB ලිමිට් එක හඳුනාගැනීම
+    // Telegram 20MB Limit Error එක අල්ලා ගැනීම
     if (!fileData.ok) {
       let errMsg = fileData.description || "Failed to get file from Telegram";
       if (errMsg.includes("too big")) {
-        errMsg = "File is too large! Telegram Bot API only allows downloading files up to 20MB.";
+        errMsg = "Telegram Bot API Limit! File is larger than 20MB. Bots cannot download files over 20MB.";
       }
       throw new Error(errMsg);
     }
@@ -209,6 +182,7 @@ async function handleMedia(message, BOT_TOKEN) {
     const arrayBuffer = await mediaRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
+    // Upload to Cloudinary
     const result = await uploadToCloudinary(buffer, media.mimeType, media.fileName);
 
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(2);
@@ -223,7 +197,6 @@ async function handleMedia(message, BOT_TOKEN) {
       (sizeStr ? `📏 <b>ꜱɪᴢᴇ:</b> <code>${sizeStr}</code>\n` : "") +
       `🌐 <b>ꜱᴇʀᴠᴇʀ:</b> ${result.serverUsed}\n` +
       `⚡ <b>ꜱᴘᴇᴇᴅ:</b> <code>${elapsed}s</code>\n` +
-      (userCaption ? `📝 <b>ᴄᴀᴘᴛɪᴏɴ:</b> ${userCaption}\n` : "") +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `🔗 <b>ᴅɪʀᴇᴄᴛ ᴜʀʟ:</b>\n` +
       `<code>${esc(result.url)}</code>\n\n` +
@@ -238,7 +211,6 @@ async function handleMedia(message, BOT_TOKEN) {
       ]
     };
 
-    let edited = false;
     if (statusId) {
       const editRes = await tgApi(BOT_TOKEN, "editMessageText", {
         chat_id: chatId,
@@ -248,17 +220,17 @@ async function handleMedia(message, BOT_TOKEN) {
         disable_web_page_preview: true,
         reply_markup: keyboard
       });
-      edited = editRes.ok;
-    }
-    if (!edited) {
+      if (!editRes.ok) await sendTelegramMessage(chatId, successText, BOT_TOKEN, { reply_markup: keyboard });
+    } else {
       await sendTelegramMessage(chatId, successText, BOT_TOKEN, { reply_markup: keyboard });
     }
   } catch (error) {
+    // මෙතනදි අපි හරියටම Error එක පෙන්නනවා. (Vercel Timeout / Cloudinary Reject / 20MB Limit)
     const errText =
       `❌ <b>ᴜᴘʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ!</b>\n\n` +
       `${media.emoji} <b>ꜰɪʟᴇ:</b> <code>${esc(media.fileName)}</code>\n` +
       `⚠️ <b>ᴇʀʀᴏʀ:</b> ${esc(error.message)}\n\n` +
-      `<i>Tip: Check file size (Max 20MB) or rename the file.</i>`;
+      `<i>💡 Tip: If this is a video/audio, make sure it is under 20MB and your Cloudinary preset allows Video/Raw uploads.</i>`;
 
     if (statusId) {
       const editRes = await tgApi(BOT_TOKEN, "editMessageText", {
@@ -276,18 +248,14 @@ async function handleMedia(message, BOT_TOKEN) {
 
 /* ---------- Webhook Handler ---------- */
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(200).send("DG-DEV Bot is running successfully!");
-  }
+  if (req.method !== "POST") return res.status(200).send("DG-DEV Bot is running successfully!");
 
   const BOT_TOKEN = process.env.BOT_TOKEN;
   if (!BOT_TOKEN) return res.status(200).json({ status: "missing token" });
 
   const update = req.body || {};
-
   try {
     if (!update.message) return res.status(200).json({ status: "ok" });
-
     const message = update.message;
     const chatId = message.chat.id;
     const text = message.text || "";
@@ -295,24 +263,17 @@ export default async function handler(req, res) {
     if (text === "/start" || text.startsWith("/start ")) {
       sendChatAction(chatId, "typing", BOT_TOKEN);
       const photoRes = await tgApi(BOT_TOKEN, "sendPhoto", {
-        chat_id: chatId,
-        photo: START_IMAGE,
-        caption: START_CAPTION,
-        parse_mode: "HTML"
+        chat_id: chatId, photo: START_IMAGE, caption: START_CAPTION, parse_mode: "HTML"
       });
       if (!photoRes.ok) await sendTelegramMessage(chatId, START_CAPTION, BOT_TOKEN);
       return res.status(200).json({ status: "ok" });
     }
 
-    if (
-      message.photo || message.video || message.audio || 
-      message.voice || message.document || message.animation || message.video_note
-    ) {
+    if (message.photo || message.video || message.audio || message.document || message.animation) {
       await handleMedia(message, BOT_TOKEN);
     }
   } catch (err) {
     console.error("Handler error:", err);
   }
-
   return res.status(200).json({ status: "ok" });
-      }
+        }
