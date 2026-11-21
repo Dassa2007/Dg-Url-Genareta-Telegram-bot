@@ -1,4 +1,4 @@
-// bot.js — DG-DEV Media URL Generator Bot v2.2 (Final Fixed)
+// bot.js — DG-DEV Media URL Generator Bot v2.3
 const servers = [
   { cloudName: "wwb8ifud", uploadPreset: "dg_dev" },
   { cloudName: "rakvvolf", uploadPreset: "dg_dev1" },
@@ -48,16 +48,20 @@ function formatBytes(bytes) {
   return `${n.toFixed(1)} ${units[i]}`;
 }
 
+// Video/Audio වල නම්වල තියෙන විශේෂ අකුරු අයින් කරන ලොජික් එක
 function buildPublicId(fileName) {
   let name = (fileName || "file").trim();
   const dotIdx = name.lastIndexOf(".");
-  if (dotIdx > 0) name = name.slice(0, dotIdx);
+  if (dotIdx > 0) name = name.slice(0, dotIdx); // Extension එක අයින් කිරීම
+  
+  // අකුරු, ඉලක්කම්, Hyphen, Underscore සහ සිංහල අකුරු විතරක් තබා ගැනීම
   name = name
-    .replace(/[\\/:*?"<>|\x00-\x1F]+/g, "")
-    .replace(/\s+/g, "_")
+    .replace(/[^a-zA-Z0-9_\-\u0D80-\u0DFF]/g, "_") 
+    .replace(/_+/g, "_")
     .trim();
+
   if (!name) name = "file";
-  if (name.length > 180) name = name.slice(0, 180);
+  if (name.length > 100) name = name.slice(0, 100);
   return name;
 }
 
@@ -91,7 +95,7 @@ async function sendChatAction(chatId, action, token) {
   } catch (_) {}
 }
 
-/* ---------- Cloudinary Multi-Server Upload (Fixed for Unsigned) ---------- */
+/* ---------- Cloudinary Multi-Server Upload ---------- */
 async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
   const publicId = buildPublicId(fileName);
   let lastError = "Unknown error";
@@ -103,8 +107,6 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
       const blob = new Blob([fileBuffer], { type: mimeType });
       formData.append("file", blob, fileName || "file");
       formData.append("upload_preset", server.uploadPreset);
-      
-      // 🔑 public_id එක විතරක් යවනවා (Cloudinary unsigned වලට මේකට අවසර දෙනවා)
       formData.append("public_id", publicId);
 
       const response = await fetch(
@@ -120,23 +122,19 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
           serverUsed: `Server ${i + 1}`,
           resourceType: data.resource_type,
           bytes: data.bytes,
-          format: data.format,
-          publicId: data.public_id
+          format: data.format
         };
       }
 
       const msg = data.error?.message || "";
       if (/already exists/i.test(msg)) {
         lastError = `"${fileName}" already exists on the server.`;
-        console.log(`Server ${i + 1} collision → trying next…`);
         continue;
       }
 
       lastError = msg || `Server ${i + 1} rejected`;
-      console.log(`Server ${i + 1} error:`, lastError);
     } catch (err) {
       lastError = err.message;
-      console.log(`Server ${i + 1} failed → trying next…`, err.message);
     }
   }
 
@@ -147,59 +145,25 @@ async function uploadToCloudinary(fileBuffer, mimeType, fileName) {
 function detectMedia(message) {
   if (message.photo) {
     const p = message.photo[message.photo.length - 1];
-    return {
-      fileId: p.file_id,
-      mimeType: "image/jpeg",
-      fileName: "image.jpg",
-      kind: "image",
-      emoji: "🖼️",
-      label: "Image",
-      action: "upload_photo"
-    };
+    return { fileId: p.file_id, mimeType: "image/jpeg", fileName: "image.jpg", kind: "image", emoji: "🖼️", label: "Image", action: "upload_photo" };
   }
   if (message.video) {
-    return {
-      fileId: message.video.file_id,
-      mimeType: message.video.mime_type || "video/mp4",
-      fileName: message.video.file_name || "video.mp4",
-      kind: "video",
-      emoji: "🎬",
-      label: "Video",
-      action: "upload_video"
-    };
+    return { fileId: message.video.file_id, mimeType: message.video.mime_type || "video/mp4", fileName: message.video.file_name || "video.mp4", kind: "video", emoji: "🎬", label: "Video", action: "upload_video" };
+  }
+  if (message.animation) {
+    return { fileId: message.animation.file_id, mimeType: message.animation.mime_type || "image/gif", fileName: message.animation.file_name || "animation.gif", kind: "animation", emoji: "🎞️", label: "GIF", action: "upload_photo" };
+  }
+  if (message.video_note) {
+    return { fileId: message.video_note.file_id, mimeType: "video/mp4", fileName: "video_note.mp4", kind: "video_note", emoji: "⭕", label: "Round Video", action: "upload_video" };
   }
   if (message.audio) {
-    return {
-      fileId: message.audio.file_id,
-      mimeType: message.audio.mime_type || "audio/mpeg",
-      fileName: message.audio.file_name || "audio.mp3",
-      kind: "audio",
-      emoji: "🎵",
-      label: "Audio",
-      action: "upload_document"
-    };
+    return { fileId: message.audio.file_id, mimeType: message.audio.mime_type || "audio/mpeg", fileName: message.audio.file_name || "audio.mp3", kind: "audio", emoji: "🎵", label: "Audio", action: "upload_document" };
   }
   if (message.voice) {
-    return {
-      fileId: message.voice.file_id,
-      mimeType: message.voice.mime_type || "audio/ogg",
-      fileName: "voice.ogg",
-      kind: "voice",
-      emoji: "🎤",
-      label: "Voice",
-      action: "upload_document"
-    };
+    return { fileId: message.voice.file_id, mimeType: message.voice.mime_type || "audio/ogg", fileName: "voice.ogg", kind: "voice", emoji: "🎤", label: "Voice", action: "upload_document" };
   }
   if (message.document) {
-    return {
-      fileId: message.document.file_id,
-      mimeType: message.document.mime_type || "application/octet-stream",
-      fileName: message.document.file_name || "document",
-      kind: "document",
-      emoji: "📄",
-      label: "File",
-      action: "upload_document"
-    };
+    return { fileId: message.document.file_id, mimeType: message.document.mime_type || "application/octet-stream", fileName: message.document.file_name || "document", kind: "document", emoji: "📄", label: "File", action: "upload_document" };
   }
   return null;
 }
@@ -226,13 +190,22 @@ async function handleMedia(message, BOT_TOKEN) {
 
   try {
     const fileData = await tgApi(BOT_TOKEN, "getFile", { file_id: media.fileId });
-    if (!fileData.ok) throw new Error("Failed to get file from Telegram");
+    
+    // 🔴 Telegram 20MB ලිමිට් එක හඳුනාගැනීම
+    if (!fileData.ok) {
+      let errMsg = fileData.description || "Failed to get file from Telegram";
+      if (errMsg.includes("too big")) {
+        errMsg = "File is too large! Telegram Bot API only allows downloading files up to 20MB.";
+      }
+      throw new Error(errMsg);
+    }
 
     const filePath = fileData.result.file_path;
     const downloadUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
 
     const mediaRes = await fetch(downloadUrl);
-    if (!mediaRes.ok) throw new Error("Failed to download file");
+    if (!mediaRes.ok) throw new Error("Failed to download file from Telegram servers");
+    
     const arrayBuffer = await mediaRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
@@ -240,7 +213,6 @@ async function handleMedia(message, BOT_TOKEN) {
 
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(2);
     const sizeStr = formatBytes(result.bytes);
-
     const lastSegment = result.url.split("/").pop();
 
     const successText =
@@ -286,7 +258,7 @@ async function handleMedia(message, BOT_TOKEN) {
       `❌ <b>ᴜᴘʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ!</b>\n\n` +
       `${media.emoji} <b>ꜰɪʟᴇ:</b> <code>${esc(media.fileName)}</code>\n` +
       `⚠️ <b>ᴇʀʀᴏʀ:</b> ${esc(error.message)}\n\n` +
-      `<i>Tip: If the filename already exists, rename the file and try again.</i>`;
+      `<i>Tip: Check file size (Max 20MB) or rename the file.</i>`;
 
     if (statusId) {
       const editRes = await tgApi(BOT_TOKEN, "editMessageText", {
@@ -309,10 +281,7 @@ export default async function handler(req, res) {
   }
 
   const BOT_TOKEN = process.env.BOT_TOKEN;
-  if (!BOT_TOKEN) {
-    console.error("BOT_TOKEN not set");
-    return res.status(200).json({ status: "missing token" });
-  }
+  if (!BOT_TOKEN) return res.status(200).json({ status: "missing token" });
 
   const update = req.body || {};
 
@@ -323,48 +292,21 @@ export default async function handler(req, res) {
     const chatId = message.chat.id;
     const text = message.text || "";
 
-    // ---- /start ----
     if (text === "/start" || text.startsWith("/start ")) {
       sendChatAction(chatId, "typing", BOT_TOKEN);
-
       const photoRes = await tgApi(BOT_TOKEN, "sendPhoto", {
         chat_id: chatId,
         photo: START_IMAGE,
         caption: START_CAPTION,
         parse_mode: "HTML"
       });
-
-      if (!photoRes.ok) {
-        await sendTelegramMessage(chatId, START_CAPTION, BOT_TOKEN);
-      }
+      if (!photoRes.ok) await sendTelegramMessage(chatId, START_CAPTION, BOT_TOKEN);
       return res.status(200).json({ status: "ok" });
     }
 
-    // ---- /help ----
-    if (text === "/help") {
-      await sendTelegramMessage(
-        chatId,
-        `📖 <b>ʜᴏᴡ ᴛᴏ ᴜꜱᴇ ᴅɢ-ᴅᴇᴠ ʙᴏᴛ</b>\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n\n` +
-          `1️⃣ Send any <b>Image</b>, <b>Video</b>, <b>Audio</b>, or <b>Document</b>\n` +
-          `2️⃣ Wait a few seconds ⏳\n` +
-          `3️⃣ Tap <b>📋 Copy URL</b> button\n\n` +
-          `📦 <b>Bulk Upload:</b> Send multiple files at once — every file gets its own link!\n\n` +
-          `📁 <b>Filename Tip:</b> The URL keeps your original filename.\n` +
-          `If you want the exact original name for photos, send them as <b>Documents</b>.\n\n` +
-          `⚡ <b>Multi-Server:</b> 4 Cloudinary servers = max speed & 99.9% uptime.`,
-        BOT_TOKEN
-      );
-      return res.status(200).json({ status: "ok" });
-    }
-
-    // ---- Media ----
     if (
-      message.photo ||
-      message.video ||
-      message.audio ||
-      message.voice ||
-      message.document
+      message.photo || message.video || message.audio || 
+      message.voice || message.document || message.animation || message.video_note
     ) {
       await handleMedia(message, BOT_TOKEN);
     }
